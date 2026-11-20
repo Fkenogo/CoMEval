@@ -1,0 +1,6 @@
+{
+  "name": "Miledge Programme Intelligence",
+  "description": "Project-lifecycle monitoring, evaluation, accountability and learning (MEAL) workspace across ChildFund Uganda and World Vision Uganda Omugo Settlement programmes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
