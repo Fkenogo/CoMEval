@@ -143,13 +143,15 @@ export const ReportArea: React.FC = () => {
         a.name,
         a.unit,
         '',
-        a.planned,
-        a.planned,
-        a.delivered,
-        a.planned > 0 ? Math.round((a.delivered / a.planned) * 100) : '',
+        a.plannedDisplay,
+        a.plannedDisplay,
+        a.deliveredDisplay,
+        a.planned !== null && a.planned > 0 && a.delivered !== null
+          ? Math.round((a.delivered / a.planned) * 100)
+          : '',
         '',
         '',
-        `${a.recordCount} approved record(s)`,
+        a.statusNote,
         displayReport.planVersionLabel,
         '',
       ]),
@@ -462,32 +464,50 @@ export const ReportArea: React.FC = () => {
                       <table className="w-full text-xs text-left border-collapse">
                         <thead>
                           <tr className="border-b border-[#E2E6E2] text-[#525D68]">
-                            <th className="py-2 pr-3 font-semibold">Code</th>
                             <th className="py-2 pr-3 font-semibold">Activity</th>
-                            <th className="py-2 px-3 font-semibold text-right">Planned</th>
+                            <th className="py-2 px-3 font-semibold text-right">Planned (Period)</th>
                             <th className="py-2 px-3 font-semibold text-right">Delivered</th>
                             <th className="py-2 px-3 font-semibold text-right">Progress</th>
-                            <th className="py-2 pl-3 font-semibold text-right">Records</th>
+                            <th className="py-2 pl-3 font-semibold">Unit &amp; Counting Rule</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-[#E2E6E2]">
                           {displayReport.activityRows.map((row) => {
-                            const pct = row.planned > 0 ? Math.round((row.delivered / row.planned) * 100) : null;
+                            const pct =
+                              row.planned !== null && row.planned > 0 && row.delivered !== null
+                                ? Math.round((row.delivered / row.planned) * 100)
+                                : null;
+                            const isMissingQty = row.delivered === null;
                             return (
-                              <tr key={row.activityId}>
-                                <td className="py-2.5 pr-3 font-mono text-[#525D68]">{row.code}</td>
-                                <td className="py-2.5 pr-3 font-medium text-[#14191F]">{row.name}</td>
-                                <td className="py-2.5 px-3 text-right font-mono tabular-nums">
-                                  {row.planned} {row.unit}
+                              <tr key={row.activityId} className="align-top">
+                                <td className="py-2.5 pr-3">
+                                  <div className="font-medium text-[#14191F]">
+                                    <span className="font-mono text-[#525D68] mr-1.5">{row.code}</span>
+                                    {row.name}
+                                  </div>
+                                  <div className="text-[11px] text-[#525D68]">
+                                    {row.recordCount} approved record(s)
+                                    {row.missingQuantityRecordCount > 0 && (
+                                      <span className="text-[#B45309] font-medium">
+                                        {' '}
+                                        · {row.missingQuantityRecordCount} missing quantity
+                                      </span>
+                                    )}
+                                  </div>
                                 </td>
-                                <td className="py-2.5 px-3 text-right font-mono font-semibold tabular-nums text-[#14532D]">
-                                  {row.delivered} {row.unit}
+                                <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap text-[#525D68]">
+                                  {row.plannedDisplay}
                                 </td>
-                                <td className="py-2.5 px-3 text-right font-mono tabular-nums">
+                                <td className="py-2.5 px-3 text-right font-mono font-semibold tabular-nums whitespace-nowrap">
+                                  <span className={isMissingQty ? 'text-[#B45309]' : 'text-[#14532D]'}>
+                                    {row.deliveredDisplay}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#525D68]">
                                   {pct !== null ? `${pct}%` : '—'}
                                 </td>
-                                <td className="py-2.5 pl-3 text-right font-mono tabular-nums text-[#525D68]">
-                                  {row.recordCount}
+                                <td className="py-2.5 pl-3 text-[11px] text-[#525D68] max-w-[260px]">
+                                  {row.statusNote}
                                 </td>
                               </tr>
                             );
@@ -663,10 +683,17 @@ export const ReportArea: React.FC = () => {
                         <div className="font-semibold text-[#525D68]">
                           Approved Record Revisions Included ({displayReport.recordRevisionsUsed.length})
                         </div>
-                        <ul className="space-y-1 text-[11px] font-mono text-[#525D68]">
+                        <ul className="space-y-1.5 text-[11px] font-mono text-[#525D68]">
                           {displayReport.recordRevisionsUsed.map((rec) => (
                             <li key={rec.recordId}>
-                              • [{rec.recordType === 'activity' ? 'DO' : 'MS'}] {rec.label} — Rev {rec.revision}
+                              <div>
+                                • [{rec.recordType === 'activity' ? 'DO' : 'MS'}] {rec.label} — Rev {rec.revision}
+                              </div>
+                              {rec.evidenceRefs && rec.evidenceRefs.length > 0 && (
+                                <div className="pl-3 text-[10px] text-[#525D68]/90 font-sans">
+                                  Evidence: {rec.evidenceRefs.join('; ')}
+                                </div>
+                              )}
                             </li>
                           ))}
                         </ul>

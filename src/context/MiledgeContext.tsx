@@ -23,12 +23,18 @@ import {
   TrackedAction,
 } from '../types/miledge';
 
-const STORAGE_KEY = 'miledge_me_shared_engine_v1';
+const STORAGE_KEY = 'miledge_me_shared_engine_v2';
 
 export interface ToastNotice {
   id: string;
   message: string;
   tone: 'success' | 'info' | 'warning' | 'error';
+}
+
+export interface PersistenceFailureNotice {
+  message: string;
+  occurredAt: string;
+  simulated: boolean;
 }
 
 interface MiledgeContextValue {
@@ -38,6 +44,15 @@ interface MiledgeContextValue {
   roleDef: (typeof DEMO_ROLES)[DemoRole];
   toasts: ToastNotice[];
   notify: (message: string, tone?: ToastNotice['tone']) => void;
+
+  // Browser storage resilience & recovery
+  persistenceError: PersistenceFailureNotice | null;
+  simulateStorageFailure: boolean;
+  hasRecoveredFromSaveFailure: boolean;
+  setSimulateStorageFailure: (enabled: boolean) => void;
+  retrySaveState: () => boolean;
+  stripLargeAttachmentsAndSave: () => number;
+  exportStateBackupJson: () => void;
 
   // Navigation & shell controls
   setActiveProject: (projectId: string) => void;
@@ -121,7 +136,13 @@ interface MiledgeContextValue {
     recordType: 'activity' | 'measurement',
     recordId: string,
     attachment: EvidenceAttachment
-  ) => void;
+  ) => { ok: boolean; error?: string };
+
+  removeEvidenceFromRecord: (
+    recordType: 'activity' | 'measurement',
+    recordId: string,
+    attachmentId: string
+  ) => { ok: boolean; error?: string };
 
   // Report layer mutations
   issueReport: (params: {
@@ -165,25 +186,151 @@ function loadState(): MiledgeState {
 export const MiledgeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<MiledgeState>(loadState);
   const [toasts, setToasts] = useState<ToastNotice[]>([]);
+  const [persistenceError, setPersistenceError] = useState<PersistenceFailureNotice | null>(null);
+  const [simulateStorageFailure, setSimulateStorageFailureState] = useState(false);
+  const [hasRecoveredFromSaveFailure, setHasRecoveredFromSaveFailure] = useState(false);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      // Ignore quota errors gracefully
-    }
-  }, [state]);
+  const nowDate = () => new Date().toISOString().slice(0, 10);
+  const nowStamp = () => new Date().toISOString().replace('T', ' ').slice(0, 16);
 
   const notify = (message: string, tone: ToastNotice['tone'] = 'success') => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     setToasts((prev) => [...prev.slice(-3), { id, message, tone }]);
     window.setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4200);
+    }, 4500);
   };
 
-  const nowDate = () => new Date().toISOString().slice(0, 10);
-  const nowStamp = () => new Date().toISOString().replace('T', ' ').slice(0, 16);
+  const persistSnapshot = (nextState: MiledgeState, forceFail: boolean): boolean => {
+    try {
+      if (forceFail) {
+        throw new DOMException(
+          'Simulated browser storage quota exceeded (QuotaExceededError).',
+          'QuotaExceededError'
+        );
+      }
+      const serialized = JSON.stringify(nextState);
+      localStorage.setItem(STORAGE_KEY, serialized);
+      // Verify read-back succeeded
+      const verify = localStorage.getItem(STORAGE_KEY);
+      if (!verify) {
+        throw new Error('Browser storage write could not be read back.');
+      }
+      setPersistenceError((prev) => {
+        if (prev) setHasRecoveredFromSaveFailure(true);
+        return null;
+      });
+      return true;
+    } catch (err) {
+      const reason =
+        err instanceof Error ? `${err.name}: ${err.message}` : 'Browser storage write failed.';
+      setPersistenceError({
+        message: `${reason} Your latest entry is still preserved in memory — retry saving, strip oversized file blobs, or download a JSON backup before reloading.`,
+        occurredAt: nowStamp(),
+        simulated: forceFail,
+      });
+      return false;
+    }
+  };
+
+  useEffect(() => {
+    const ok = persistSnapshot(state, simulateStorageFailure);
+    if (!ok) {
+      notify(
+        'Browser storage save failed — your entry is preserved in memory. Use the recovery bar at the top to retry or export.',
+        'error'
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+
+  const setSimulateStorageFailure = (enabled: boolean) => {
+    setSimulateStorageFailureState(enabled);
+    if (enabled) {
+      notify(
+        'Simulated browser storage failure enabled. Next save will fail visibly while keeping your entry recoverable in memory.',
+        'warning'
+      );
+    } else {
+      const ok = persistSnapshot(state, false);
+      if (ok) {
+        notify('Simulated storage failure cleared and current workspace saved to browser storage.', 'success');
+      }
+    }
+  };
+
+  const retrySaveState = (): boolean => {
+    if (simulateStorageFailure) {
+      setSimulateStorageFailureState(false);
+    }
+    const ok = persistSnapshot(state, false);
+    if (ok) {
+      setHasRecoveredFromSaveFailure(true);
+      notify('Recovered and saved all in-memory changes to browser storage.', 'success');
+    } else {
+      notify('Browser storage still cannot save. Try stripping large attachments or downloading a JSON backup.', 'error');
+    }
+    return ok;
+  };
+
+  const stripLargeAttachmentsAndSave = (): number => {
+    let stripped = 0;
+    const stripList = (list: EvidenceAttachment[]): EvidenceAttachment[] =>
+      list.map((att) => {
+        if (att.dataUrl && att.dataUrl.length > 80_000) {
+          stripped += 1;
+          return {
+            ...att,
+            dataUrl: undefined,
+            sourceRefText: `${att.sourceRefText ? `${att.sourceRefText} · ` : ''}File payload trimmed to recover storage quota (${att.name})`,
+          };
+        }
+        return att;
+      });
+
+    const trimmed: MiledgeState = {
+      ...state,
+      activityRecords: state.activityRecords.map((r) => ({ ...r, evidence: stripList(r.evidence) })),
+      measurementRecords: state.measurementRecords.map((r) => ({ ...r, evidence: stripList(r.evidence) })),
+      learningItems: state.learningItems.map((l) => ({
+        ...l,
+        actions: l.actions.map((a) =>
+          a.closureEvidence?.dataUrl && a.closureEvidence.dataUrl.length > 80_000
+            ? {
+                ...a,
+                closureEvidence: stripList([a.closureEvidence])[0],
+              }
+            : a
+        ),
+      })),
+    };
+    setSimulateStorageFailureState(false);
+    setState(trimmed);
+    const ok = persistSnapshot(trimmed, false);
+    if (ok) {
+      setHasRecoveredFromSaveFailure(true);
+      notify(
+        stripped > 0
+          ? `Preserved all records & source references while stripping ${stripped} large file blob(s). Workspace saved.`
+          : 'Workspace saved to browser storage.',
+        'success'
+      );
+    }
+    return stripped;
+  };
+
+  const exportStateBackupJson = () => {
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `miledge_me_backup_${nowDate()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    notify('Downloaded JSON backup of your current in-memory workspace.', 'info');
+  };
 
   const activeProject =
     state.projects.find((p) => p.id === state.activeProjectId) || state.projects[0];
@@ -198,6 +345,13 @@ export const MiledgeProvider: React.FC<{ children: React.ReactNode }> = ({ child
       roleDef,
       toasts,
       notify,
+      persistenceError,
+      simulateStorageFailure,
+      hasRecoveredFromSaveFailure,
+      setSimulateStorageFailure,
+      retrySaveState,
+      stripLargeAttachmentsAndSave,
+      exportStateBackupJson,
 
       setActiveProject: (projectId) => {
         setState((prev) => ({ ...prev, activeProjectId: projectId }));
@@ -291,6 +445,12 @@ export const MiledgeProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const existing = input.existingId
           ? state.activityRecords.find((r) => r.id === input.existingId)
           : undefined;
+
+        if (existing && existing.status === 'approved') {
+          const err = `Approved revision Rev ${existing.revision} is locked. Create a correction revision (Rev ${existing.revision + 1}) to change answers or supporting evidence.`;
+          notify(err, 'warning');
+          return { ok: false, error: err };
+        }
 
         const actor = DEMO_ROLES[state.activeRole].actorName;
 
@@ -436,6 +596,12 @@ export const MiledgeProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const existing = input.existingId
           ? state.measurementRecords.find((r) => r.id === input.existingId)
           : undefined;
+
+        if (existing && existing.status === 'approved') {
+          const err = `Approved revision Rev ${existing.revision} is locked. Create a correction revision (Rev ${existing.revision + 1}) to change answers or supporting evidence.`;
+          notify(err, 'warning');
+          return { ok: false, error: err };
+        }
         const actor = DEMO_ROLES[state.activeRole].actorName;
 
         const questionSnapshot = existing
@@ -697,6 +863,18 @@ export const MiledgeProvider: React.FC<{ children: React.ReactNode }> = ({ child
       },
 
       attachEvidenceToRecord: (recordType, recordId, attachment) => {
+        const target =
+          recordType === 'activity'
+            ? state.activityRecords.find((r) => r.id === recordId)
+            : state.measurementRecords.find((r) => r.id === recordId);
+
+        if (!target) return { ok: false, error: 'Record not found.' };
+        if (target.status === 'approved') {
+          const err = `Evidence on approved Rev ${target.revision} is locked. Create a correction revision (Rev ${target.revision + 1}) to add or replace supporting evidence.`;
+          notify(err, 'warning');
+          return { ok: false, error: err };
+        }
+
         if (recordType === 'activity') {
           setState((prev) => ({
             ...prev,
@@ -712,7 +890,44 @@ export const MiledgeProvider: React.FC<{ children: React.ReactNode }> = ({ child
             ),
           }));
         }
-        notify(`Attached "${attachment.name}" to record.`);
+        notify(`Attached "${attachment.name}" to Rev ${target.revision}.`);
+        return { ok: true };
+      },
+
+      removeEvidenceFromRecord: (recordType, recordId, attachmentId) => {
+        const target =
+          recordType === 'activity'
+            ? state.activityRecords.find((r) => r.id === recordId)
+            : state.measurementRecords.find((r) => r.id === recordId);
+
+        if (!target) return { ok: false, error: 'Record not found.' };
+        if (target.status === 'approved') {
+          const err = `Evidence on approved Rev ${target.revision} is locked. Create a correction revision (Rev ${target.revision + 1}) to modify supporting evidence.`;
+          notify(err, 'warning');
+          return { ok: false, error: err };
+        }
+
+        if (recordType === 'activity') {
+          setState((prev) => ({
+            ...prev,
+            activityRecords: prev.activityRecords.map((r) =>
+              r.id === recordId
+                ? { ...r, evidence: r.evidence.filter((e) => e.id !== attachmentId), updatedAt: nowDate() }
+                : r
+            ),
+          }));
+        } else {
+          setState((prev) => ({
+            ...prev,
+            measurementRecords: prev.measurementRecords.map((r) =>
+              r.id === recordId
+                ? { ...r, evidence: r.evidence.filter((e) => e.id !== attachmentId), updatedAt: nowDate() }
+                : r
+            ),
+          }));
+        }
+        notify(`Removed attachment from Rev ${target.revision}.`, 'info');
+        return { ok: true };
       },
 
       issueReport: (params) => {
@@ -814,7 +1029,16 @@ export const MiledgeProvider: React.FC<{ children: React.ReactNode }> = ({ child
         notify('Tracked action closed with recorded closure evidence.');
       },
     }),
-    [state, activeProject, activeApprovedPlan, roleDef, toasts]
+    [
+      state,
+      activeProject,
+      activeApprovedPlan,
+      roleDef,
+      toasts,
+      persistenceError,
+      simulateStorageFailure,
+      hasRecoveredFromSaveFailure,
+    ]
   );
 
   return <MiledgeContext.Provider value={value}>{children}</MiledgeContext.Provider>;

@@ -340,25 +340,58 @@ export function validateMeasurementRecord(
 }
 
 /**
- * Extract mapped numeric inputs once from configured question answers or raw fields
+ * Extract mapped numeric inputs once from configured question answers.
+ * Uses a count of records (1 per record) ONLY for activities explicitly configured
+ * with deliveryCountingMode === 'count_events'. Returns null when a numeric quantity
+ * is missing so callers can surface missing quantities separately from 0.
  */
-export function extractActivityMappedValue(record: ActivityRecord, indicatorId?: string): number | null {
+export function extractActivityMappedValue(
+  record: ActivityRecord,
+  indicatorId?: string,
+  activityDef?: ActivityDefinition
+): number | null {
+  if (activityDef?.deliveryCountingMode === 'count_events') {
+    return 1;
+  }
+
+  // 1. Prefer the explicitly designated quantity question matching the activity's unit
+  if (activityDef?.quantityQuestionId) {
+    const raw = record.answers[activityDef.quantityQuestionId];
+    if (raw !== undefined && raw !== null && raw !== '' && !Number.isNaN(Number(raw))) {
+      return Number(raw);
+    }
+    // Quantity question was explicitly configured, so blank means missing quantity (never silently fall back to 1)
+    return null;
+  }
+
+  // 2. Otherwise check numeric question explicitly mapped to an indicator
   for (const q of record.questionSnapshot) {
     if (
       q.indicatorMapping &&
       (!indicatorId || q.indicatorMapping.indicatorId === indicatorId) &&
-      (q.indicatorMapping.role === 'count' || q.indicatorMapping.role === 'value')
+      (q.indicatorMapping.role === 'count' || q.indicatorMapping.role === 'value') &&
+      (q.type === 'whole_number' || q.type === 'decimal')
     ) {
       const raw = record.answers[q.id];
-      if (raw !== undefined && raw !== '' && !Number.isNaN(Number(raw))) {
+      if (raw !== undefined && raw !== null && raw !== '' && !Number.isNaN(Number(raw))) {
         return Number(raw);
       }
     }
   }
-  // Fallback: if activity counts completions (e.g. inspections), each record = 1
-  if (indicatorId && record.questionSnapshot.some((q) => q.indicatorMapping?.indicatorId === indicatorId)) {
-    return 1;
+
+  // 3. Fallback for legacy/unlinked records without activityDef: if a single required numeric question exists, use it
+  if (!activityDef && !indicatorId) {
+    const numericQs = record.questionSnapshot.filter(
+      (q) => q.type === 'whole_number' || q.type === 'decimal'
+    );
+    if (numericQs.length === 1) {
+      const raw = record.answers[numericQs[0].id];
+      if (raw !== undefined && raw !== null && raw !== '' && !Number.isNaN(Number(raw))) {
+        return Number(raw);
+      }
+    }
   }
+
   return null;
 }
 
@@ -588,16 +621,28 @@ export function calculateIndicatorSummary(
       if (acts.length === 0) {
         return { val: null, missing: true, note: 'No approved activity records linked yet.' };
       }
-      const vals = acts
-        .map((a) => extractActivityMappedValue(a, indicator.id))
-        .filter((v): v is number => v !== null);
+      const extractedPairs = acts.map((a) => {
+        const def = plan.activities.find((x) => x.id === a.activityId);
+        return { rec: a, val: extractActivityMappedValue(a, indicator.id, def), def };
+      });
+      const vals = extractedPairs.map((p) => p.val).filter((v): v is number => v !== null);
+      const missingCount = extractedPairs.length - vals.length;
       if (vals.length === 0) {
-        return { val: null, missing: true, note: 'Linked activity records have no mapped numeric answers.' };
+        return {
+          val: null,
+          missing: true,
+          note: `${missingCount} approved activity record(s) missing numeric quantity (distinct from 0).`,
+        };
       }
       const sum = vals.reduce((acc, v) => acc + v, 0);
+      const allEvents = extractedPairs.every((p) => p.def?.deliveryCountingMode === 'count_events');
       return {
         val: Number(sum.toFixed(2)),
-        note: `Sum of ${vals.length} approved activity record(s) (${vals.join(' + ')} = ${sum}).`,
+        note: allEvents
+          ? `Event count: ${vals.length} approved record(s) explicitly configured to count events.`
+          : missingCount > 0
+          ? `Sum of ${vals.length} approved record(s) (${vals.join(' + ')} = ${sum}); ${missingCount} record(s) missing quantity excluded.`
+          : `Sum of ${vals.length} approved activity record(s) (${vals.join(' + ')} = ${sum}).`,
       };
     }
 
@@ -764,25 +809,89 @@ export function buildReportPayload(params: {
     (r) => periodId === 'all' || r.periodId === periodId
   );
 
-  // Activity planned vs delivered
+  // Activity planned vs delivered (strictly period-consistent, unit-consistent, and explicit missing-vs-zero)
   const activityRows: ReportActivityRow[] = plan.activities.map((act: ActivityDefinition) => {
     const matching = approvedActs.filter((r) => r.activityId === act.id);
-    const delivered = matching.reduce((sum, r) => {
-      const mapped = extractActivityMappedValue(r, act.linkedIndicatorId);
-      return sum + (mapped !== null ? mapped : 1);
-    }, 0);
+    const countingMode = act.deliveryCountingMode || 'sum_question';
+
+    // Period-consistent planned quantity
+    let planned: number | null = null;
+    if (periodId === 'all') {
+      if (act.periodPlannedQuantities && Object.keys(act.periodPlannedQuantities).length > 0) {
+        planned = Object.values(act.periodPlannedQuantities).reduce((s, n) => s + n, 0);
+      } else {
+        planned = act.expectedQuantity;
+      }
+    } else if (act.periodPlannedQuantities) {
+      planned =
+        act.periodPlannedQuantities[periodId] !== undefined
+          ? act.periodPlannedQuantities[periodId]
+          : null;
+    } else {
+      planned = act.periodId === periodId ? act.expectedQuantity : null;
+    }
+
+    const plannedPeriodLabel =
+      plan.reportingRules.periods.find((p) => p.id === act.periodId)?.label || act.periodId;
+    const plannedDisplay =
+      planned !== null ? `${planned} ${act.unit}` : 'Not planned in period';
+
+    let delivered: number | null = null;
+    let deliveredDisplay = 'Missing quantity';
+    let missingQuantityRecordCount = 0;
+    let statusNote = '';
+
+    if (countingMode === 'count_events') {
+      delivered = matching.length;
+      deliveredDisplay = `${delivered} ${act.unit}`;
+      statusNote =
+        planned === null
+          ? `Event count (${matching.length} approved record(s)); activity scheduled for ${plannedPeriodLabel}.`
+          : `Event count: ${matching.length} approved record(s) (explicitly configured to count events).`;
+    } else {
+      const extractedVals = matching.map((r) => extractActivityMappedValue(r, act.linkedIndicatorId, act));
+      const numericVals = extractedVals.filter((v): v is number => v !== null);
+      missingQuantityRecordCount = extractedVals.length - numericVals.length;
+
+      if (matching.length === 0) {
+        delivered = null;
+        deliveredDisplay = 'Missing quantity';
+        statusNote =
+          planned === null
+            ? `Not planned in this period (scheduled for ${plannedPeriodLabel}); no approved records.`
+            : `No approved records in this period yet (missing quantity, distinct from 0 ${act.unit}).`;
+      } else if (numericVals.length === 0) {
+        delivered = null;
+        deliveredDisplay = 'Missing quantity';
+        statusNote = `${missingQuantityRecordCount} approved record(s) missing numeric quantity in ${act.unit} (not counted as 0 or 1).`;
+      } else {
+        delivered = Number(numericVals.reduce((acc, v) => acc + v, 0).toFixed(2));
+        deliveredDisplay = `${delivered} ${act.unit}`;
+        statusNote =
+          missingQuantityRecordCount > 0
+            ? `Summed ${numericVals.length} record(s) in ${act.unit}; ${missingQuantityRecordCount} approved record(s) missing quantity excluded.`
+            : `Sum of ${numericVals.length} approved record(s) in ${act.unit}.`;
+      }
+    }
+
     const missingEvidenceCount = matching.filter(
       (r) => r.evidenceRequirementSnapshot.required && r.evidence.length === 0
     ).length;
+
     return {
       activityId: act.id,
       code: act.code,
       name: act.name,
-      planned: act.expectedQuantity,
+      planned,
+      plannedDisplay,
       delivered,
+      deliveredDisplay,
       unit: act.unit,
+      deliveryCountingMode: countingMode,
       recordCount: matching.length,
+      missingQuantityRecordCount,
       missingEvidenceCount,
+      statusNote,
     };
   });
 
@@ -865,7 +974,16 @@ export function buildReportPayload(params: {
   dataQualityNotes.push(`Plan version applied: ${planVersion.versionLabel} (${planVersion.changeNote}).`);
 
   const sourceRefSet = new Set<string>();
-  plan.sourceDocuments.forEach((d) => sourceRefSet.add(`${d.title} [${d.version}] — ${d.reference}${d.available ? '' : ' (Not supplied)'}`));
+  plan.sourceDocuments.forEach((d) =>
+    sourceRefSet.add(`${d.title} [${d.version}] — ${d.reference}${d.available ? '' : ' (Not supplied)'}`)
+  );
+  approvedActs.forEach((r) =>
+    r.evidence.forEach((e) => sourceRefSet.add(e.sourceRefText || e.name))
+  );
+  approvedMeas.forEach((r) => {
+    if (r.studyMetadata?.sourceCitation) sourceRefSet.add(r.studyMetadata.sourceCitation);
+    r.evidence.forEach((e) => sourceRefSet.add(e.sourceRefText || e.name));
+  });
   indicatorRows.forEach((r) => r.sourceRefs.forEach((s) => sourceRefSet.add(s)));
 
   const projectLearn = learningItems.filter((l) => l.projectId === project.id);
@@ -887,12 +1005,14 @@ export function buildReportPayload(params: {
       recordType: 'activity' as const,
       label: `${r.activityNameSnapshot} (${r.date}, ${r.siteNameSnapshot})`,
       revision: r.revision,
+      evidenceRefs: r.evidence.map((e) => e.sourceRefText || e.name),
     })),
     ...approvedMeas.map((r) => ({
       recordId: r.id,
       recordType: 'measurement' as const,
       label: `${r.indicatorCodeSnapshot} (${r.observationDate}, ${r.siteNameSnapshot})`,
       revision: r.revision,
+      evidenceRefs: r.evidence.map((e) => e.sourceRefText || e.name),
     })),
   ];
 

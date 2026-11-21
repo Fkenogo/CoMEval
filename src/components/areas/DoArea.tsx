@@ -303,7 +303,8 @@ export const DoArea: React.FC = () => {
             <div className="bg-white border border-[#E2E6E2] rounded-xl divide-y divide-[#E2E6E2]">
               {filteredRecords.map((rec) => {
                 const val = validateActivityRecord(rec, state.activityRecords);
-                const mappedVal = extractActivityMappedValue(rec);
+                const actDef = plan?.activities.find((a) => a.id === rec.activityId);
+                const mappedVal = extractActivityMappedValue(rec, undefined, actDef);
                 const answerSummary = rec.questionSnapshot
                   .map((q) => {
                     const a = rec.answers[q.id];
@@ -335,10 +336,20 @@ export const DoArea: React.FC = () => {
                         />
                       </div>
 
-                      {mappedVal !== null && (
+                      {!rec.isUnplanned && (
                         <div className="shrink-0 text-right font-mono tabular-nums">
-                          <div className="text-base font-bold text-[#14532D]">{mappedVal}</div>
-                          <div className="text-[11px] text-[#525D68]">mapped count</div>
+                          {mappedVal !== null ? (
+                            <>
+                              <div className="text-base font-bold text-[#14532D]">{mappedVal}</div>
+                              <div className="text-[11px] text-[#525D68]">
+                                {actDef?.deliveryCountingMode === 'count_events'
+                                  ? `event (${actDef.unit})`
+                                  : actDef?.unit || 'quantity'}
+                              </div>
+                            </>
+                          ) : (
+                            <div className="text-[11px] font-semibold text-[#B45309]">Missing quantity</div>
+                          )}
                         </div>
                       )}
                     </div>

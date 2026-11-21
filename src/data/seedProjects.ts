@@ -128,6 +128,8 @@ const CHILDFUND_PLAN_V1: PlanSnapshot = {
       expectedQuantity: 12,
       unit: 'trainers',
       periodId: 'cf-p-2023h1',
+      deliveryCountingMode: 'sum_question',
+      quantityQuestionId: 'cf-q-trainers-count',
       participantMode: 'registry',
       questions: [
         {
@@ -164,6 +166,8 @@ const CHILDFUND_PLAN_V1: PlanSnapshot = {
       expectedQuantity: 36,
       unit: 'farmer groups',
       periodId: 'cf-p-2023h1',
+      deliveryCountingMode: 'sum_question',
+      quantityQuestionId: 'cf-q-fg-count',
       participantMode: 'registry',
       questions: [
         {
@@ -498,6 +502,7 @@ const OMUGO_PLAN_V1: PlanSnapshot = {
       expectedQuantity: 12,
       unit: 'inspections',
       periodId: 'om-p-2018end',
+      deliveryCountingMode: 'count_events',
       participantMode: 'none',
       questions: [
         {
@@ -532,11 +537,13 @@ const OMUGO_PLAN_V1: PlanSnapshot = {
     {
       id: 'om-act-latrine-check',
       code: 'ACT-OM-2',
-      name: 'Verify CFS VIP latrine blocks',
+      name: 'Verify CFS VIP latrine stances',
       frameworkItemId: 'om-fw-op1',
-      expectedQuantity: 2,
-      unit: 'latrine blocks',
+      expectedQuantity: 10,
+      unit: 'VIP stances',
       periodId: 'om-p-2018end',
+      deliveryCountingMode: 'sum_question',
+      quantityQuestionId: 'om-q-stances',
       participantMode: 'aggregate',
       questions: [
         {
@@ -1356,7 +1363,7 @@ export function createInitialMiledgeState(): MiledgeState {
     planVersion: cfPlanV1,
     periodId: 'cf-p-2023h1',
     templateName: 'Standard Donor Report',
-    includedSections: ['activities', 'indicators', 'breakdowns', 'gaps', 'narrative'],
+    includedSections: ['activities', 'indicators', 'sites', 'gaps', 'narrative', 'sources'],
     breakdownDimension: 'Site',
     allActivityRecords: activityRecords,
     allMeasurementRecords: measurementRecords,
@@ -1369,7 +1376,7 @@ export function createInitialMiledgeState(): MiledgeState {
     planVersion: omPlanV1,
     periodId: 'om-p-2018end',
     templateName: 'Evaluation Handover Summary',
-    includedSections: ['activities', 'indicators', 'breakdowns', 'gaps', 'narrative'],
+    includedSections: ['activities', 'indicators', 'sites', 'gaps', 'narrative', 'sources'],
     breakdownDimension: 'Site',
     allActivityRecords: activityRecords,
     allMeasurementRecords: measurementRecords,

@@ -780,21 +780,36 @@ export const MeasureArea: React.FC = () => {
 
                     {selectedSummary.contributingActivityRecords.length > 0 ? (
                       <div className="bg-white rounded-lg border border-[#C5E5CD] divide-y divide-[#E2E6E2] text-xs">
-                        {selectedSummary.contributingActivityRecords.map((act) => (
-                          <div key={act.id} className="px-3 py-2 flex items-center justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="font-medium text-[#14191F] truncate">
-                                {act.activityNameSnapshot} · {act.siteNameSnapshot}
+                        {selectedSummary.contributingActivityRecords.map((act) => {
+                          const actDef = plan.activities.find((a) => a.id === act.activityId);
+                          const isUniqueInd = selectedIndicator.aggregationRule === 'unique_count';
+                          const val = extractActivityMappedValue(act, selectedIndicator.id, actDef);
+                          return (
+                            <div key={act.id} className="px-3 py-2 flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="font-medium text-[#14191F] truncate">
+                                  {act.activityNameSnapshot} · {act.siteNameSnapshot}
+                                </div>
+                                <div className="text-[11px] font-mono text-[#525D68]">
+                                  {act.date} · Rev {act.revision} · Approved
+                                </div>
                               </div>
-                              <div className="text-[11px] font-mono text-[#525D68]">
-                                {act.date} · Rev {act.revision} · Approved
-                              </div>
+                              {isUniqueInd ? (
+                                <span className="font-mono font-bold text-[#14532D] tabular-nums shrink-0">
+                                  {act.participantIds?.length ?? 0} IDs
+                                </span>
+                              ) : val !== null ? (
+                                <span className="font-mono font-bold text-[#14532D] tabular-nums shrink-0">
+                                  +{val}
+                                </span>
+                              ) : (
+                                <span className="font-mono text-[11px] font-semibold text-[#B45309] shrink-0">
+                                  Missing qty
+                                </span>
+                              )}
                             </div>
-                            <span className="font-mono font-bold text-[#14532D] tabular-nums shrink-0">
-                              +{extractActivityMappedValue(act, selectedIndicator.id) ?? 1}
-                            </span>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     ) : (
                       <div className="text-xs text-[#B45309] flex items-center gap-1.5">

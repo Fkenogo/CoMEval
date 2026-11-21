@@ -10,6 +10,7 @@ import {
 import { useMiledge } from '../../context/MiledgeContext';
 import {
   ActivityDefinition,
+  ActivityDeliveryCountingMode,
   AggregationRule,
   CollectionQuestion,
   FrameworkLevel,
@@ -72,6 +73,8 @@ export const PlanArea: React.FC = () => {
   const [actName, setActName] = useState('');
   const [actQty, setActQty] = useState('10');
   const [actUnit, setActUnit] = useState('sessions');
+  const [actPeriodId, setActPeriodId] = useState('');
+  const [actCountingMode, setActCountingMode] = useState<ActivityDeliveryCountingMode>('sum_question');
   const [actPartMode, setActPartMode] = useState<'none' | 'aggregate' | 'registry'>('none');
   const [actEvLabel, setActEvLabel] = useState('Signed attendance or site photo');
   const [actEvReq, setActEvReq] = useState(true);
@@ -192,14 +195,19 @@ export const PlanArea: React.FC = () => {
   const handleAddActivity = (e: React.FormEvent) => {
     e.preventDefault();
     if (!actName.trim()) return;
+    const chosenPeriod =
+      actPeriodId && draft.reportingRules.periods.some((p) => p.id === actPeriodId)
+        ? actPeriodId
+        : draft.reportingRules.defaultPeriodId;
     const newAct: ActivityDefinition = {
       id: `act-${Date.now()}`,
       code: `ACT-${draft.activities.length + 1}`,
       name: actName.trim(),
       frameworkItemId: draft.framework[draft.framework.length - 1]?.id || '',
       expectedQuantity: Math.max(1, Number(actQty) || 1),
-      unit: actUnit.trim() || 'units',
-      periodId: draft.reportingRules.defaultPeriodId,
+      unit: actUnit.trim() || (actCountingMode === 'count_events' ? 'events' : 'units'),
+      periodId: chosenPeriod,
+      deliveryCountingMode: actCountingMode,
       participantMode: actPartMode,
       questions: [],
       evidenceRequirement: {
@@ -215,7 +223,10 @@ export const PlanArea: React.FC = () => {
     setQTargetKind('activity');
     setQTargetId(newAct.id);
     setActName('');
-    notify(`Activity "${newAct.name}" added to draft plan. Configure its questions in Collection Questions.`, 'info');
+    notify(
+      `Activity "${newAct.name}" added (${actCountingMode === 'count_events' ? 'counts events' : `sums numeric quantity in ${newAct.unit}`}). Configure its questions in Tab 6.`,
+      'info'
+    );
   };
 
   const handleAddIndicator = (e: React.FormEvent) => {
@@ -337,15 +348,20 @@ export const PlanArea: React.FC = () => {
       if (qTargetKind === 'activity') {
         return {
           ...p,
-          activities: p.activities.map((a) =>
-            a.id === resolvedQTargetId
-              ? {
-                  ...a,
-                  linkedIndicatorId: newQMapIndId || a.linkedIndicatorId,
-                  questions: [...a.questions, q],
-                }
-              : a
-          ),
+          activities: p.activities.map((a) => {
+            if (a.id !== resolvedQTargetId) return a;
+            const isNumeric = q.type === 'whole_number' || q.type === 'decimal';
+            const autoSetQuantityQ =
+              a.deliveryCountingMode !== 'count_events' && !a.quantityQuestionId && isNumeric
+                ? q.id
+                : a.quantityQuestionId;
+            return {
+              ...a,
+              linkedIndicatorId: newQMapIndId || a.linkedIndicatorId,
+              quantityQuestionId: autoSetQuantityQ,
+              questions: [...a.questions, q],
+            };
+          }),
         };
       }
       return {
@@ -822,33 +838,40 @@ export const PlanArea: React.FC = () => {
           <div className="lg:col-span-7 bg-white border border-[#E2E6E2] rounded-xl p-5 space-y-4">
             <h2 className="text-sm font-bold text-[#14191F]">Planned Activities ({draft.activities.length})</h2>
             <div className="divide-y divide-[#E2E6E2] border border-[#E2E6E2] rounded-lg">
-              {draft.activities.map((a) => (
-                <div key={a.id} className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="space-y-0.5">
-                    <div className="font-bold text-[#14191F]">
-                      {a.code} — {a.name}
+              {draft.activities.map((a) => {
+                const perLabel =
+                  draft.reportingRules.periods.find((p) => p.id === a.periodId)?.label || a.periodId;
+                return (
+                  <div key={a.id} className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="space-y-0.5">
+                      <div className="font-bold text-[#14191F]">
+                        {a.code} — {a.name}
+                      </div>
+                      <MetaRow
+                        items={[
+                          `Planned: ${a.expectedQuantity} ${a.unit} (${perLabel})`,
+                          a.deliveryCountingMode === 'count_events'
+                            ? 'Counting rule: Count approved events'
+                            : `Counting rule: Sum quantity in ${a.unit}`,
+                          `${a.questions.length} question(s)`,
+                          `Evidence: ${a.evidenceRequirement.label}${a.evidenceRequirement.required ? ' (Required)' : ''}`,
+                        ]}
+                      />
                     </div>
-                    <MetaRow
-                      items={[
-                        `Planned: ${a.expectedQuantity} ${a.unit}`,
-                        `${a.questions.length} configured question(s)`,
-                        `Evidence: ${a.evidenceRequirement.label}${a.evidenceRequirement.required ? ' (Required)' : ''}`,
-                      ]}
-                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQTargetKind('activity');
+                        setQTargetId(a.id);
+                        setTab('questions');
+                      }}
+                      className="shrink-0 px-2.5 py-1.5 rounded-md border border-[#14532D] text-[#14532D] font-semibold hover:bg-[#EBF7EE]"
+                    >
+                      Edit Questions
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setQTargetKind('activity');
-                      setQTargetId(a.id);
-                      setTab('questions');
-                    }}
-                    className="shrink-0 px-2.5 py-1.5 rounded-md border border-[#14532D] text-[#14532D] font-semibold hover:bg-[#EBF7EE]"
-                  >
-                    Edit Questions
-                  </button>
-                </div>
-              ))}
+                );
+              })}
               {draft.activities.length === 0 && (
                 <div className="p-4 text-[#525D68]">No planned activities yet. Add your first activity below.</div>
               )}
@@ -874,6 +897,27 @@ export const PlanArea: React.FC = () => {
                     <option value="none">No participant tracking</option>
                     <option value="aggregate">Aggregate count</option>
                     <option value="registry">Synthetic participant IDs</option>
+                  </select>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <select
+                    value={actPeriodId || draft.reportingRules.defaultPeriodId}
+                    onChange={(e) => setActPeriodId(e.target.value)}
+                    className="bg-white border border-[#C5C9C2] rounded px-2.5 py-1.5"
+                  >
+                    {draft.reportingRules.periods.map((per) => (
+                      <option key={per.id} value={per.id}>
+                        Period: {per.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={actCountingMode}
+                    onChange={(e) => setActCountingMode(e.target.value as ActivityDeliveryCountingMode)}
+                    className="bg-white border border-[#C5C9C2] rounded px-2.5 py-1.5"
+                  >
+                    <option value="sum_question">Delivery rule: Sum numeric quantity question</option>
+                    <option value="count_events">Delivery rule: Count each approved record as 1 event</option>
                   </select>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -1340,6 +1384,9 @@ export const PlanArea: React.FC = () => {
                           q.min !== undefined ? `Min ${q.min}` : null,
                           q.max !== undefined ? `Max ${q.max}` : null,
                           q.options ? `Options: ${q.options.join(' / ')}` : null,
+                          qTargetKind === 'activity' && activeQTargetActivity?.quantityQuestionId === q.id
+                            ? `Delivered quantity field (${activeQTargetActivity.unit})`
+                            : null,
                           q.indicatorMapping
                             ? `Feeds indicator (${q.indicatorMapping.role})`
                             : null,
@@ -1348,6 +1395,26 @@ export const PlanArea: React.FC = () => {
                     </div>
                     {canEdit && (
                       <div className="flex items-center gap-1 shrink-0">
+                        {qTargetKind === 'activity' &&
+                          activeQTargetActivity &&
+                          activeQTargetActivity.deliveryCountingMode !== 'count_events' &&
+                          (q.type === 'whole_number' || q.type === 'decimal') &&
+                          activeQTargetActivity.quantityQuestionId !== q.id && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateDraftPlan(activeProject.id, (p) => ({
+                                  ...p,
+                                  activities: p.activities.map((a) =>
+                                    a.id === activeQTargetActivity.id ? { ...a, quantityQuestionId: q.id } : a
+                                  ),
+                                }))
+                              }
+                              className="px-2 py-1 rounded border border-[#C5E5CD] bg-[#EBF7EE] text-[#14532D] text-[11px] font-semibold"
+                            >
+                              Use as qty
+                            </button>
+                          )}
                         <button
                           type="button"
                           onClick={() => moveQuestion(idx, -1)}

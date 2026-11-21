@@ -86,6 +86,8 @@ export interface CollectionQuestion {
   indicatorMapping?: IndicatorMapping;
 }
 
+export type ActivityDeliveryCountingMode = 'sum_question' | 'count_events';
+
 export interface ActivityDefinition {
   id: string;
   code: string;
@@ -95,6 +97,9 @@ export interface ActivityDefinition {
   expectedQuantity: number;
   unit: string;
   periodId: string;
+  periodPlannedQuantities?: Record<string, number>;
+  deliveryCountingMode: ActivityDeliveryCountingMode;
+  quantityQuestionId?: string;
   participantMode: 'none' | 'aggregate' | 'registry';
   questions: CollectionQuestion[];
   evidenceRequirement: EvidenceRequirement;
@@ -291,11 +296,16 @@ export interface ReportActivityRow {
   activityId: string;
   code: string;
   name: string;
-  planned: number;
-  delivered: number;
+  planned: number | null;
+  plannedDisplay: string;
+  delivered: number | null;
+  deliveredDisplay: string;
   unit: string;
+  deliveryCountingMode: ActivityDeliveryCountingMode;
   recordCount: number;
+  missingQuantityRecordCount: number;
   missingEvidenceCount: number;
+  statusNote: string;
 }
 
 export interface ReportIndicatorRow {
@@ -341,7 +351,13 @@ export interface IssuedReport {
   dataQualityNotes: string[];
   sourceReferences: string[];
   narrative: string;
-  recordRevisionsUsed: { recordId: string; recordType: 'activity' | 'measurement'; label: string; revision: number }[];
+  recordRevisionsUsed: {
+    recordId: string;
+    recordType: 'activity' | 'measurement';
+    label: string;
+    revision: number;
+    evidenceRefs: string[];
+  }[];
 }
 
 export interface TrackedAction {

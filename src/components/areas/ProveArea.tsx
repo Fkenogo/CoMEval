@@ -7,10 +7,12 @@ import {
   FileWarning,
   GitBranch,
   History,
+  Lock,
   MessageSquarePlus,
   RotateCcw,
   ShieldAlert,
   ShieldCheck,
+  Trash2,
 } from 'lucide-react';
 import { useMiledge } from '../../context/MiledgeContext';
 import {
@@ -61,6 +63,7 @@ export const ProveArea: React.FC = () => {
     roleDef,
     transitionRecordStatus,
     attachEvidenceToRecord,
+    removeEvidenceFromRecord,
     createActivityRevision,
     createMeasurementRevision,
     addLearningItem,
@@ -431,16 +434,23 @@ export const ProveArea: React.FC = () => {
                 </div>
               </div>
 
-              {/* Pending correction revision notice */}
+              {/* Pending correction revision notice on an approved record */}
               {selectedItem.status === 'approved' &&
                 hasPendingCorrectionRevision(
                   selectedItem.kind === 'activity' ? state.activityRecords : state.measurementRecords,
                   selectedItem.record.recordGroupId
                 ) && (
                   <div className="px-5 py-2.5 bg-[#FEF3C7] border-b border-[#E2E6E2] text-xs text-[#92400E]">
-                    A newer unapproved correction revision exists for this record group. Live reports continue using this approved Rev {selectedItem.record.revision} until the new revision is approved.
+                    A newer unapproved correction revision exists for this record group. Live reports continue using this approved Rev {selectedItem.record.revision} and its locked evidence until the replacement revision is approved.
                   </div>
                 )}
+
+              {/* Supersedes comparison callout when inspecting a correction revision (Rev > 1) */}
+              {selectedItem.record.revision > 1 && selectedItem.status !== 'approved' && (
+                <div className="px-5 py-2.5 bg-[#EBF7EE] border-b border-[#C5E5CD] text-xs text-[#14532D]">
+                  <strong>Correction Revision Rev {selectedItem.record.revision}:</strong> Changes to answers or supporting evidence happen here while the previously approved revision remains live in Report until Rev {selectedItem.record.revision} is approved. Already issued reports retain their frozen original snapshot permanently.
+                </div>
+              )}
 
               {/* Two-column body: Record Data (left) + Supporting Evidence (right) */}
               <div className="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-[#E2E6E2]">
@@ -561,14 +571,24 @@ export const ProveArea: React.FC = () => {
                       )}
 
                       {/* Computed summary inside snapshot box */}
-                      {selectedItem.kind === 'activity' && (
-                        <div className="pt-2 border-t border-[#C5E5CD] text-xs flex flex-wrap items-center justify-between gap-2 text-[#14532D]">
-                          <span>Mapped indicator contribution:</span>
-                          <strong className="font-mono tabular-nums">
-                            {extractActivityMappedValue(selectedItem.record) ?? 'Qualitative / Count = 1'}
-                          </strong>
-                        </div>
-                      )}
+                      {selectedItem.kind === 'activity' && (() => {
+                        const actDef = plan.activities.find((a) => a.id === selectedItem.record.activityId);
+                        const mapped = extractActivityMappedValue(selectedItem.record, undefined, actDef);
+                        return (
+                          <div className="pt-2 border-t border-[#C5E5CD] text-xs flex flex-wrap items-center justify-between gap-2 text-[#14532D]">
+                            <span>
+                              {actDef?.deliveryCountingMode === 'count_events'
+                                ? 'Event-count contribution:'
+                                : `Delivered quantity (${actDef?.unit || 'mapped'}):`}
+                            </span>
+                            <strong className="font-mono tabular-nums">
+                              {mapped !== null
+                                ? `${mapped}${actDef ? ` ${actDef.unit}` : ''}`
+                                : 'Missing quantity'}
+                            </strong>
+                          </div>
+                        );
+                      })()}
 
                       {selectedItem.kind === 'measurement' && (() => {
                         const indDef = plan.indicators.find((i) => i.id === selectedItem.record.indicatorId);
@@ -669,6 +689,15 @@ export const ProveArea: React.FC = () => {
                       ({selectedItem.record.evidenceRequirementSnapshot.required ? 'Required' : 'Optional'})
                     </div>
 
+                    {selectedItem.status === 'approved' && (
+                      <div className="rounded-lg border border-[#C5E5CD] bg-[#EBF7EE] px-3 py-2 text-[11px] text-[#14532D] flex items-start gap-2">
+                        <Lock className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                        <span>
+                          <strong>Approved Rev {selectedItem.record.revision} evidence locked:</strong> Supporting evidence and answers on approved revisions are preserved permanently. Use <strong>Create correction revision</strong> below to add or replace evidence.
+                        </span>
+                      </div>
+                    )}
+
                     {selectedItem.record.evidence.length === 0 ? (
                       <div className="rounded-lg border border-dashed border-[#C5C9C2] bg-white p-4 text-xs text-[#525D68] text-center">
                         No evidence attached to this record yet.
@@ -684,30 +713,52 @@ export const ProveArea: React.FC = () => {
                               )}
                               <div className="text-[11px] text-[#525D68]">
                                 {att.uploadedBy} · {att.uploadedAt}
-                                {att.simulated ? ' · Simulated' : ''}
+                                {att.dataUrl && !att.simulated ? ' · Persisted locally' : ''}
+                                {att.simulated ? ' · Simulated sample' : ''}
                               </div>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => setPreviewAtt(att)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-[#C5E5CD] bg-[#EBF7EE] text-[#14532D] font-semibold shrink-0 hover:bg-[#D9F0DF]"
-                            >
-                              <Eye className="w-3.5 h-3.5" />
-                              Open
-                            </button>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => setPreviewAtt(att)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-[#C5E5CD] bg-[#EBF7EE] text-[#14532D] font-semibold hover:bg-[#D9F0DF]"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                Open
+                              </button>
+                              {(selectedItem.status === 'returned' || selectedItem.status === 'draft') &&
+                                roleDef.canCapture && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      removeEvidenceFromRecord(selectedItem.kind, selectedItem.id, att.id)
+                                    }
+                                    aria-label={`Remove ${att.name} from Rev ${selectedItem.record.revision}`}
+                                    className="p-1.5 rounded-md text-[#525D68] hover:text-[#B91C1C] hover:bg-[#FEF2F2]"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                            </div>
                           </li>
                         ))}
                       </ul>
                     )}
 
-                    {/* Allow attaching evidence directly here when record is returned or draft */}
+                    {/* Allow attaching evidence directly here ONLY when record is returned or draft (never on approved) */}
                     {(selectedItem.status === 'returned' || selectedItem.status === 'draft') && roleDef.canCapture && (
                       <div className="pt-2 space-y-2">
                         <div className="text-xs font-semibold text-[#14532D]">
-                          Attach missing evidence &amp; resubmit
+                          {selectedItem.record.revision > 1
+                            ? `Update evidence on Correction Rev ${selectedItem.record.revision}`
+                            : 'Attach missing evidence & resubmit'}
                         </div>
                         <EvidenceManager
-                          buttonLabel="Attach missing evidence"
+                          buttonLabel={
+                            selectedItem.record.revision > 1
+                              ? `Add evidence to Rev ${selectedItem.record.revision}`
+                              : 'Attach missing evidence'
+                          }
                           attachments={[]}
                           sourceDocuments={plan.sourceDocuments}
                           actorName={roleDef.actorName}

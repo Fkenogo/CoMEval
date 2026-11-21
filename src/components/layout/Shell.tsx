@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
 import {
+  AlertTriangle,
   BarChart3,
   CheckSquare,
   ClipboardEdit,
   Compass,
+  Download,
   FileBarChart2,
   Lightbulb,
+  RefreshCw,
   RotateCcw,
   SlidersHorizontal,
 } from 'lucide-react';
@@ -29,6 +32,11 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
     activeApprovedPlan,
     roleDef,
     toasts,
+    persistenceError,
+    simulateStorageFailure,
+    retrySaveState,
+    stripLargeAttachmentsAndSave,
+    exportStateBackupJson,
     setActiveProject,
     setActiveArea,
     setActiveRole,
@@ -188,12 +196,63 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {simulateStorageFailure && !persistenceError && (
+            <span className="font-semibold text-[#B45309]">
+              Simulated storage fault armed (next save will fail) ·
+            </span>
+          )}
           <span>
             Role: <strong className="text-[#14191F]">{roleDef.label}</strong>
             {roleDef.approvedOnlyView ? ' (Approved records & issued reports only)' : ''}
           </span>
         </div>
       </div>
+
+      {/* Browser Save Failure Recovery Bar — visible whenever localStorage save fails */}
+      {persistenceError && (
+        <div
+          role="alert"
+          className="bg-[#FEF2F2] border-b border-[#FECACA] px-4 sm:px-6 py-3 text-xs text-[#991B1B] no-print"
+        >
+          <div className="max-w-[1360px] mx-auto flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-[#B91C1C]" />
+              <div className="space-y-0.5">
+                <div className="font-bold text-[#991B1B]">
+                  Browser storage save failed ({persistenceError.occurredAt})
+                  {persistenceError.simulated ? ' — Simulated Test Fault' : ''}
+                </div>
+                <p className="text-[#7F1D1D]">{persistenceError.message}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => retrySaveState()}
+                className="min-h-[36px] px-3 py-1.5 rounded-lg bg-[#14532D] text-white font-semibold hover:bg-[#0F3F22] inline-flex items-center gap-1.5"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Retry save
+              </button>
+              <button
+                type="button"
+                onClick={() => stripLargeAttachmentsAndSave()}
+                className="min-h-[36px] px-3 py-1.5 rounded-lg border border-[#FECACA] bg-white text-[#991B1B] font-semibold hover:bg-[#FEE2E2]"
+              >
+                Keep refs &amp; trim large files
+              </button>
+              <button
+                type="button"
+                onClick={() => exportStateBackupJson()}
+                className="min-h-[36px] px-3 py-1.5 rounded-lg border border-[#C5C9C2] bg-white text-[#14191F] font-semibold hover:bg-[#F6F7F5] inline-flex items-center gap-1.5"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Download JSON backup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Content Container */}
       <main className="flex-1 w-full max-w-[1360px] mx-auto px-3 sm:px-6 py-5 sm:py-6 pb-20 lg:pb-8">
